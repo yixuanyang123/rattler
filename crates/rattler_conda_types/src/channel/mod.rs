@@ -85,6 +85,9 @@ pub enum NamedChannelOrUrl {
 
     /// A url
     Url(Url),
+
+    /// New Path variant
+    Path(std::path::PathBuf), 
 }
 
 impl NamedChannelOrUrl {
@@ -96,6 +99,7 @@ impl NamedChannelOrUrl {
         match self {
             NamedChannelOrUrl::Name(name) => name,
             NamedChannelOrUrl::Url(url) => url.as_str().trim_end_matches('/'),
+            NamedChannelOrUrl::Path(path) => path.to_str().unwrap_or("invalid path"), /// Convert PathBuf to &str
         }
     }
 
@@ -113,6 +117,8 @@ impl NamedChannelOrUrl {
                 base_url
             }
             NamedChannelOrUrl::Url(url) => url,
+            NamedChannelOrUrl::Path(path) => directory_path_to_url(path) /// Convert PathBuf to a URL
+                .expect("failed to convert path to URL"), /// Handle potential error
         };
         add_trailing_slash(&url).into_owned()
     }
@@ -122,6 +128,10 @@ impl NamedChannelOrUrl {
         let name = match &self {
             NamedChannelOrUrl::Name(name) => Some(name.clone()),
             NamedChannelOrUrl::Url(base_url) => config.strip_channel_alias(base_url),
+            NamedChannelOrUrl::Path(path) => {
+                // For paths, convert the path to a string and use it as the channel name.
+                path.to_str().map(|s| s.to_string())
+            }
         };
         let base_url = self.into_base_url(config);
         Channel {
@@ -143,6 +153,8 @@ impl FromStr for NamedChannelOrUrl {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         if parse_scheme(s).is_some() {
             Ok(NamedChannelOrUrl::Url(Url::from_str(s)?))
+        } else if Path::new(s).exists() { // Detect if it's a valid file path
+            Ok(NamedChannelOrUrl::Path(PathBuf::from(s)))
         } else {
             Ok(NamedChannelOrUrl::Name(s.to_string()))
         }
@@ -164,7 +176,10 @@ impl serde::Serialize for NamedChannelOrUrl {
     where
         S: Serializer,
     {
-        self.as_str().serialize(serializer)
+        match self {
+            NamedChannelOrUrl::Path(path) => path.to_str().unwrap().serialize(serializer), /// Serialize Path as a string
+            _ => self.as_str().serialize(serializer), /// For Name and Url, call the existing as_str method
+        }
     }
 }
 
@@ -803,6 +818,16 @@ mod tests {
         let channel = Channel::from_str("nvidia/label/cuda-11.8.0", &channel_config).unwrap();
         assert_eq!(
             channel.base_url(),
+            named.into_channel(&channel_config).base_url()
+        );
+
+        /// Test with NamedChannelOrUrl::Path
+        let path = std::path::PathBuf::from("/some/local/path");
+        let named = NamedChannelOrUrl::Path(path.clone());
+        /// Create a Channel from a path and compare the base_url
+        let channel = Channel::from_str(path.to_str().unwrap(), &channel_config).unwrap();
+        assert_eq!(
+            &channel.base_url,
             named.into_channel(&channel_config).base_url()
         );
     }
